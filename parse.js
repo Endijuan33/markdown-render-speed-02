@@ -1369,8 +1369,12 @@ function tryGfmAutolink(text, i, plainStart, allowUnderscore) {
           }
           end = trimAutolinkEnd(text, i, end);
           const linkText = text.slice(i, end);
-          // domain: after the last @ in the authority, else the authority
+          // domain: after the last @ in the authority, else the authority.
+          // The scheme colon must survive trimming: a `word.word:` whose
+          // authority is only punctuation (doc-31: `renderer.code:.`)
+          // trims to just `renderer.code` — that is not a scheme link.
           const colon = linkText.indexOf(':');
+          if (colon === -1) return null;
           let authEnd = linkText.length;
           for (let k = colon + 1; k < linkText.length; k++) {
             const c = linkText.charCodeAt(k);
