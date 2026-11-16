@@ -2230,7 +2230,22 @@ function parseBlocks(st) {
         // owned, even with no content yet (doc-10: `>   ~~~shell`
         // followed by a blank `>` line — the blank line is an empty
         // code line, not the end of the block).
-        if (tip().t === 'code' && tip().fenced && curIndent(cur) < node.contentIndent && (tip().lines.length > 0 || cur.i >= cur.s.length)) { container = node; idx++; continue; }
+        // A code block inside a blockquote cannot own a line that
+        // lacks the `>` marker: without it the quote (and the code
+        // inside it) is over, and the line becomes a paragraph in
+        // the item (doc-36: `const x = 1;` without `>` after a
+        // `> ~~~json` block). When the line does carry a `>`, the
+        // quote will be matched next and the owns rule still applies.
+        let quoteBetween = false;
+        for (let q = idx + 1; q < open.length; q++) if (open[q].t === 'quote') { quoteBetween = true; break; }
+        let hasQuoteMarker = true;
+        if (quoteBetween) {
+          const sI2 = cur.i, sC2 = cur.col, sP2 = cur.pend;
+          curSkipSpaces(cur, 3);
+          hasQuoteMarker = curChar(cur) === 62;
+          cur.i = sI2; cur.col = sC2; cur.pend = sP2;
+        }
+        if (tip().t === 'code' && tip().fenced && curIndent(cur) < node.contentIndent && (tip().lines.length > 0 || cur.i >= cur.s.length) && hasQuoteMarker) { container = node; idx++; continue; }
         const ind = curIndent(cur);
         // An empty item (no children yet) that a blank line has passed
         // does not accept indented content: the list is over and the
