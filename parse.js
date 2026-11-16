@@ -2228,7 +2228,6 @@ function parseBlocks(st) {
       let stripped = 0;
       while (stripped < t.fenceIndent && curChar(cur) === 32) { curConsume(cur); stripped++; }
       let txt = curText(cur);
-      if (cur.pend > 0) txt = ' '.repeat(cur.pend) + txt;
       if (t.nested && txt.length > 0 && (txt.charCodeAt(0) === 9 || txt.charCodeAt(0) === 32)) {
         // expand the leading whitespace run only if it contains a tab
         let hasTab = false;
@@ -2438,7 +2437,11 @@ function parseBlocks(st) {
           if (fence.char === '`' && info.indexOf('`') !== -1) {
             cur.i = saveI; cur.col = saveCol; cur.pend = savePend;
           } else {
-            const node = { t: 'code', fenced: true, fenceChar: fence.char, fenceLen: fence.len, info: info, fenceIndent: fence.indent, nested: tip().t !== 'doc', lines: [] };
+            // Backtick fences strip up to the fence indent from content
+            // lines (cm-131/132/133); tilde fences do NOT strip any
+            // indent (doc-22, T1–T3, U1–U2: a `~~~ts` fence at indent N
+            // keeps all N spaces on its content lines).
+            const node = { t: 'code', fenced: true, fenceChar: fence.char, fenceLen: fence.len, info: info, fenceIndent: fence.char === '`' ? fence.indent : 0, nested: tip().t !== 'doc', lines: [] };
             addNode(node);
             continue lineLoop;
           }
