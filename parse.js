@@ -475,7 +475,9 @@ function parseInline(text, refs, st) {
   // (a += loop over many small pieces is measurably slower).
   for (let k = 0; k < out.length; k++) {
     const item = out[k];
-    if (typeof item !== 'string') out[k] = item.ct + item.d.repeat(item.n) + item.ot;
+    if (typeof item !== 'string') {
+      out[k] = item.innerSpan ? item.d.repeat(item.n) + item.ct + item.ot : item.ct + item.d.repeat(item.n) + item.ot;
+    }
   }
   return out.join('');
 }
@@ -565,6 +567,19 @@ function processEmphasis(delims, out, start) {
     }
     opener.ot = '<' + tag + '>' + opener.ot;
     closer.ct = closer.ct + '</' + tag + '>';
+    // When the span just formed contains another formed span, a
+    // partially-used closer renders its leftover delimiters BEFORE the
+    // closing tag — but only for <strong> (W1/doc-30:
+    // `**...*tool*one***` renders `one*` inside the <strong>). For
+    // <em> the leftover renders after the tag (doc-04/20:
+    // `*...*else*returns**` renders `</em>*`).
+    let hasInner = false;
+    if (tag === 'strong') {
+      for (let s = 0; s < spans.length; s++) {
+        if (spans[s][0] > delims[openerIdx] && spans[s][1] < delims[k]) { hasInner = true; break; }
+      }
+    }
+    if (hasInner) closer.innerSpan = true;
     spans.push([delims[openerIdx], delims[k], tag, ch]);
     opener.n -= use;
     closer.n -= use;
