@@ -173,11 +173,9 @@ function parseInline(text, refs, st) {
   let i = 0;
   const n = text.length;
   let plainStart = 0;
-  // O(1) counters replacing per-char scans:
-  // activeNoLink = # of active brackets that could still form a link
-  // (GFM autolink suppression); openUnderscore = # of `_` delims with
-  // canOpen and n > 0 (email-domain `_` handling).
-  let activeNoLink = 0;
+  // O(1) counter replacing a per-char scan:
+  // openUnderscore = # of `_` delims with canOpen and n > 0
+  // (email-domain `_` handling).
   let openUnderscore = 0;
 
   const flushPlain = (end) => {
@@ -284,7 +282,6 @@ function parseInline(text, refs, st) {
       flushPlain(i);
       out.push('[');
       brackets.push({ outPos: out.length - 1, bangPos: -1, delimLen: delims.length, active: true, srcPos: i, hasLink: false });
-      activeNoLink++;
       i++; plainStart = i;
       continue;
     }
@@ -295,7 +292,6 @@ function parseInline(text, refs, st) {
       const bangPos = out.length - 1;
       out.push('[');
       brackets.push({ outPos: out.length - 1, bangPos: bangPos, delimLen: delims.length, active: true, srcPos: i + 1, hasLink: false });
-      activeNoLink++;
       i += 2; plainStart = i;
       continue;
     }
@@ -310,11 +306,8 @@ function parseInline(text, refs, st) {
         i = r;
       }
       plainStart = i;
-      // tryLink mutates brackets (active/hasLink/splice) and truncates
-      // delims: recompute the O(1) counters (a `]` is rare, so a scan
-      // here is cheap).
-      activeNoLink = 0;
-      for (let q = 0; q < brackets.length; q++) if (brackets[q].active && !brackets[q].hasLink) activeNoLink++;
+      // tryLink truncates delims: recompute the O(1) `_`-opener counter
+      // (a `]` is rare, so a scan here is cheap).
       openUnderscore = 0;
       for (let q = 0; q < delims.length; q++) {
         const o = out[delims[q]];
@@ -395,13 +388,26 @@ function parseInline(text, refs, st) {
     // bracket can never form a link, so URLs inside it DO autolink
     // (doc-08: `https://sub.domain.example.io` inside the outer
     // bracket, after the inner link formed, autolinks).
-    if ((c === 119 || c === 104 || c === 102 || isAlnum(c)) && activeNoLink === 0 && !st.inLink) {
+    if ((c === 119 || c === 104 || c === 102 || isAlnum(c)) && !st.inLink) {
       // Gate the (expensive) autolink scan to word starts: the char
       // before must be start-of-text, whitespace, or punctuation
       // (same check tryGfmAutolink does first). Mid-word alphanumerics
       // can never start a URL/email, so skip the call entirely.
       const prev = i === 0 ? 32 : text.charCodeAt(i - 1);
       if (prev === 32 || prev === 9 || prev === 10 || isPunctCode(prev)) {
+      // A URL inside a bracket autolinks unless that bracket will
+      // form a link (doc-39). Check every active bracket: the URL is
+      // inside all of them, and any one forming a link makes it link
+      // text (plain). Cache each bracket's close index (findBracketClose
+      // is O(n)).
+      let suppress = false;
+      for (let q = 0; q < brackets.length; q++) {
+        const br = brackets[q];
+        if (!br.active || br.hasLink) continue;
+        if (br.closeIdx === undefined) br.closeIdx = findBracketClose(text, br.srcPos + 1);
+        if (bracketWillFormLink(text, br, refs)) { suppress = true; break; }
+      }
+      if (!suppress) {
       // a _ after an email domain is a closing emphasis delimiter (not
       // part of the address) when an unmatched _ opener precedes it
       const allowUnderscore = openUnderscore > 0;
@@ -411,6 +417,7 @@ function parseInline(text, refs, st) {
         out.push(auto.html);
         i = auto.next; plainStart = i;
         continue;
+      }
       }
       }
     }
@@ -532,14 +539,26 @@ function codeSpanContent(text, i, limit) {
     while (e < n && text.charCodeAt(e) === 96) e++;
     if (e - b === m) {
       // A closer beyond the link text's `]` (limit) is only usable for
-      // a single-backtick opener whose span does not cross a newline:
-      // a multi-backtick span cannot cross a link boundary (doc-09:
-      // `` ``url` `` inside `[docs each ...](...)` must not match the
-      // `` `` `` on the next line — the backticks stay literal and the
-      // link forms), and neither can a multi-line span. A single-
-      // backtick span on one line may cross it (cm-342:
-      // `` `link](/foo` ``, cm-525, cm-537 all form).
-      if (limit !== undefined && b >= limit && (m > 1 || text.slice(j, b).indexOf('\n') !== -1)) return null;
+      // a single-backtick opener whose span does not cross a newline,
+      // and whose content is not a complete inline link `](...)`
+      // preceded by other text: a multi-backtick span cannot cross a
+      // link boundary (doc-09: `` ``url` `` inside
+      // `[docs each ...](...)` must not match the `` `` `` on the next
+      // line — the backticks stay literal and the link forms), and
+      // neither can a multi-line span, nor a span whose content is
+      // `text](dest)` (doc-16: the `` ` `` after `guide` in
+      // `[values ``guide` in](#should)` must not swallow the link).
+      // A single-backtick span may cross it when its content starts
+      // with `]` (cm-525: `` `](/uri)` `` forms) or has `](` but no
+      // closing `)` (cm-342: `` `link](/foo` `` forms, cm-537).
+      if (limit !== undefined && b >= limit) {
+        if (m > 1 || text.slice(j, b).indexOf('\n') !== -1) return null;
+        if (text.charCodeAt(j) !== 93) {
+          const seg = text.slice(j, b);
+          const lp = seg.indexOf('](');
+          if (lp !== -1 && seg.indexOf(')', lp + 2) !== -1) return null;
+        }
+      }
       let content = text.slice(j, b);
       content = content.replace(/\n/g, ' ');
       if (content.length >= 2 && content.charCodeAt(0) === 32 && content.charCodeAt(content.length - 1) === 32 && content.trim() !== '') {
@@ -685,6 +704,53 @@ function makeHref(dest) {
 }
 function makeTitleAttr(title) {
   return ' title="' + escapeAttr(decodeEntities(title)) + '"';
+}
+
+// Will the bracket b form a link? Uses its cached close index and the
+// same destination/label logic as tryLink (without consuming anything).
+// A URL inside a bracket autolinks unless the bracket will form a link
+// (doc-39: `[text https://...][3]` with no `[3]:` definition autolinks
+// the URL; with a definition, or an inline destination, it stays plain).
+function bracketWillFormLink(text, b, refs) {
+  const closeIdx = b.closeIdx;
+  if (closeIdx === undefined || closeIdx === -1) return false;
+  const n = text.length;
+  const nextCh = closeIdx + 1 < n ? text.charCodeAt(closeIdx + 1) : -1;
+  const linkTextStart = b.srcPos + 1;
+  const linkTextEnd = closeIdx;
+  if (nextCh === 40) { // ( inline link
+    let j = skipSpacesNewlines(text, closeIdx + 2);
+    const d = parseLinkDestination(text, j);
+    if (d !== null) {
+      j = skipSpacesNewlines(text, d.next);
+      if (j < n && text.charCodeAt(j) === 41) return makeHref(d.dest) !== null;
+      const t = parseLinkTitle(text, j);
+      if (t !== null) {
+        j = skipSpacesNewlines(text, t.next);
+        if (j < n && text.charCodeAt(j) === 41) return makeHref(d.dest) !== null;
+      }
+    }
+    // inline failed: shortcut fallback (cm-568)
+    return refs.has(normalizeLabel(text.slice(linkTextStart, linkTextEnd)));
+  }
+  if (nextCh === 91) { // [ full / collapsed reference
+    let j = closeIdx + 2;
+    let labelEnd = -1;
+    while (j < n) {
+      const c = text.charCodeAt(j);
+      if (c === 93) { labelEnd = j; break; }
+      if (c === 91 || c === 10) break;
+      if (c === 92 && j + 1 < n) { j += 2; continue; }
+      j++;
+    }
+    if (labelEnd === -1) return false;
+    let label;
+    if (labelEnd === closeIdx + 2) label = text.slice(linkTextStart, linkTextEnd);
+    else label = text.slice(closeIdx + 2, labelEnd);
+    return refs.has(normalizeLabel(label));
+  }
+  // shortcut reference
+  return refs.has(normalizeLabel(text.slice(linkTextStart, linkTextEnd)));
 }
 
 // Try to resolve a link at text[closeIdx] === ']'. Returns the index just past
