@@ -1298,7 +1298,7 @@ function tryGfmAutolink(text, i, plainStart, allowUnderscore) {
       if (!isAlnum(c) && c !== 45 && c !== 46) break;
       dEnd++;
     }
-    const domain = linkText.slice(0, dEnd);
+    const domain = linkText.slice(0, dEnd).replace(/\.+$/, '');
     if (!isValidDomain(domain)) return null;
     const href = makeHref('http://' + linkText);
     if (href === null) return null;
@@ -1322,7 +1322,10 @@ function tryGfmAutolink(text, i, plainStart, allowUnderscore) {
       if (!isAlnum(c) && c !== 45 && c !== 46) break;
       dEnd++;
     }
-    const domain = text.slice(dStart, dEnd);
+    // A trailing dot is part of the link text (doc-37/40:
+    // `https://img.shields.io.\` keeps the dot) but not of the
+    // hostname used for validation.
+    const domain = text.slice(dStart, dEnd).replace(/\.+$/, '');
     if (!isValidDomain(domain)) return null;
     const href = makeHref(linkText);
     if (href === null) return null;
