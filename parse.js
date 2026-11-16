@@ -2107,6 +2107,13 @@ function parseBlocks(st) {
         let txt;
         if (t.t === 'code' && !t.fenced) {
           txt = line.replace(/^ {0,4}/, '');
+        } else if (t.t === 'code' && t.fenced) {
+          // a whitespace-only line inside a fenced code block also
+          // loses up to the fence indent (doc-13: `   ` inside a
+          // 2-indent backtick fence renders as ` `, not `   `)
+          let s = 0;
+          while (s < t.fenceIndent && s < line.length && line.charCodeAt(s) === 32) s++;
+          txt = line.slice(s);
         } else {
           txt = line;
         }
