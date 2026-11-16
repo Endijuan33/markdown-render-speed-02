@@ -1305,12 +1305,14 @@ function tryGfmAutolink(text, i, plainStart, allowUnderscore) {
     return { html: '<a href="' + href + '">' + escapeText(linkText) + '</a>', next: end };
   }
   // --- scheme:// --- (case-insensitive: Https:// and Http:// autolink)
+  // Compare by charCode (lowercased via | 32) instead of slicing +
+  // toLowerCase: tryGfmAutolink runs at every word start.
   let scheme = null;
-  const low7 = text.slice(i, i + 7).toLowerCase();
-  const low8 = text.slice(i, i + 8).toLowerCase();
-  if (low7 === 'http://') scheme = 7;
-  else if (low8 === 'https://') scheme = 8;
-  else if (text.slice(i, i + 6).toLowerCase() === 'ftp://') scheme = 6;
+  const c0 = text.charCodeAt(i) | 32, c1 = text.charCodeAt(i + 1) | 32, c2 = text.charCodeAt(i + 2) | 32, c3 = text.charCodeAt(i + 3) | 32;
+  if (c0 === 104 && c1 === 116 && c2 === 116 && c3 === 112) { // http
+    if ((text.charCodeAt(i + 4) | 32) === 115 && text.charCodeAt(i + 5) === 58 && text.charCodeAt(i + 6) === 47 && text.charCodeAt(i + 7) === 47) scheme = 8; // https://
+    else if (text.charCodeAt(i + 4) === 58 && text.charCodeAt(i + 5) === 47 && text.charCodeAt(i + 6) === 47) scheme = 7; // http://
+  } else if (c0 === 102 && c1 === 116 && c2 === 112 && text.charCodeAt(i + 3) === 58 && text.charCodeAt(i + 4) === 47 && text.charCodeAt(i + 5) === 47) scheme = 6; // ftp://
   if (scheme !== null) {
     let end = scanGfmUrlEnd(text, i);
     end = trimAutolinkEnd(text, i, end);
