@@ -2162,7 +2162,14 @@ function parseBlocks(st) {
         curSkipSpaces(cur, 3);
         if (curChar(cur) === 62) { // >
           curConsume(cur);
-          if (curChar(cur) === 32 || curChar(cur) === 9) curAdvance(cur, 1);
+          // only a space (not a tab) follows the `>` marker when the
+          // tip is a fenced code block: a tab there is code content,
+          // not the marker's optional space (doc-30: `>\t` inside a
+          // fenced code block must expand from the blockquote base,
+          // not lose 1 column to the marker). Otherwise a tab is
+          // consumed as the marker's space (cm-006: `>\t\tfoo`).
+          const tipFenced = tip().t === 'code' && tip().fenced;
+          if (curChar(cur) === 32 || (curChar(cur) === 9 && !tipFenced)) curAdvance(cur, 1);
           container = node; idx++;
           continue;
         }
