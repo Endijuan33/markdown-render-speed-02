@@ -1928,8 +1928,11 @@ function parseBlocks(st) {
           const lastL = lines[lines.length - 1];
           const isLastLine = lastL.ln === lastLn;
           // a block whose next line is blank carries no trailing \n;
-          // type 6/7 blocks only carry one when they end the document
-          const nextBlank = !isLastLine && isBlankLine(st.lines[lastL.ln + 1]) && st.lines[lastL.ln + 1].indexOf('\t') === -1;
+          // type 6/7 blocks only carry one when they end the document.
+          // Only a TRULY EMPTY next line counts as blank here: a
+          // whitespace-only line (spaces, doc-24, or a tab, doc-15)
+          // does not suppress the trailing newline.
+          const nextBlank = !isLastLine && st.lines[lastL.ln + 1].length === 0;
           const isBlockTag = node.htmlType === 6 || node.htmlType === 7;
           const wantNl = isBlockTag
             ? (isLastLine && st.endsWithNewline)
