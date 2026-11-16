@@ -419,7 +419,15 @@ function parseInline(text, refs, st) {
         plainStart = i;
       } else {
         flushPlain(i);
-        out.push('\n');
+        // A soft break before an HTML comment `<!--` or a processing
+        // instruction `<?` is dropped (doc-04/I3/J3: `para text here`
+        // + `<!-- note -->` renders with no `\n` between them), but
+        // before a regular tag (`<b>`, `<span>`) it is kept (J1/J2).
+        let j = i + 1;
+        while (j < n && (text.charCodeAt(j) === 32 || text.charCodeAt(j) === 9)) j++;
+        const isCommentOrPI = (text.charCodeAt(j) === 60 && text.charCodeAt(j + 1) === 33 && text.charCodeAt(j + 2) === 45 && text.charCodeAt(j + 3) === 45) ||
+          (text.charCodeAt(j) === 60 && text.charCodeAt(j + 1) === 63);
+        if (!isCommentOrPI) out.push('\n');
         i++; plainStart = i;
       }
       continue;
