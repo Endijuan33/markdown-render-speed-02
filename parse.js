@@ -1204,13 +1204,16 @@ function trimAutolinkEnd(text, start, end) {
     }
     break;
   }
-  // balance parens: strip trailing ')' while there are more ')' than '('
+  // balance parens: strip trailing ')' while there are more ')' than '('.
+  // A ')' immediately followed by ']' is not counted: the `)]` is a
+  // link-closing sequence, not a URL paren (P4/D08/D22: `a)](b)` keeps
+  // both parens, while `a(b))` loses one).
   let open = 0, close = 0;
   for (let k = start; k < end; k++) {
     if (text.charCodeAt(k) === 40) open++;
-    else if (text.charCodeAt(k) === 41) close++;
+    else if (text.charCodeAt(k) === 41 && !(k + 1 < end && text.charCodeAt(k + 1) === 93)) close++;
   }
-  while (close > open && end > start && text.charCodeAt(end - 1) === 41) {
+  while (close > open && end > start && text.charCodeAt(end - 1) === 41 && !(end < text.length && text.charCodeAt(end) === 93)) {
     end--; close--;
     // after stripping a ')', more trailing punctuation may appear
     while (end > start) {
@@ -1223,17 +1226,16 @@ function trimAutolinkEnd(text, start, end) {
 }
 
 // Scan the end of a bare GFM autolink URL starting at text[i]: advance
-// until whitespace, '<', or a control char. A `]` immediately followed
-// by `(` ends the URL right after the `]` (doc-08: the autolink is
-// `https://sub.domain.example.io)]`, and the `(` starts the next
-// segment) — the `](` sequence is link syntax, not URL content.
+// until whitespace, '<', or a control char. The URL runs through `](`
+// sequences (probes D08/D22: `https://...)](next)` and
+// `https://...)](https://...)` are a single autolink, not a URL cut
+// at the `]`).
 function scanGfmUrlEnd(text, i) {
   const n = text.length;
   let end = i;
   while (end < n) {
     const c = text.charCodeAt(end);
     if (c === 32 || c === 9 || c === 10 || c === 60 || c < 32) break;
-    if (c === 93 && end + 1 < n && text.charCodeAt(end + 1) === 40) { end++; break; }
     end++;
   }
   return end;
@@ -2207,17 +2209,33 @@ function parseBlocks(st) {
         if (open[k].t === 'item') {
           let inQuote = false;
           for (let q = k - 1; q >= 1; q--) if (open[q].t === 'quote') { inQuote = true; break; }
-          if (!inQuote) {
           const ci = open[k].contentIndent;
+          // count the leading whitespace columns first: a lazy line
+          // with fewer spaces than the content indent loses them all
+          // only when it has 4+ of them (doc-22: 4 spaces < indent 5
+          // are stripped; doc-06: 1 space < indent 2 is kept), and a
+          // line with >= the indent loses exactly the indent. The
+          // 4-space threshold applies inside a blockquote too (the
+          // inQuote exception only protects < 4 spaces there).
           let col = 0, cut = 0;
           while (cut < lt.length) {
             const ch = lt.charCodeAt(cut);
             if (ch === 32) { col++; cut++; }
             else if (ch === 9) { col = ((col / 4) | 0) * 4 + 4; cut++; }
             else break;
-            if (col >= ci) break;
           }
-          if (cut > 0) lt = lt.slice(cut);
+          if (inQuote && col < ci && col < 4) {
+            // keep the leading spaces (doc-06)
+          } else {
+            let col2 = 0, cut2 = 0;
+            while (cut2 < lt.length) {
+              const ch = lt.charCodeAt(cut2);
+              if (ch === 32) { col2++; cut2++; }
+              else if (ch === 9) { col2 = ((col2 / 4) | 0) * 4 + 4; cut2++; }
+              else break;
+              if (col2 >= ci) break;
+            }
+            if (cut2 > 0) lt = lt.slice(cut2);
           }
           break;
         }
