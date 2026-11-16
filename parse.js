@@ -1226,16 +1226,30 @@ function trimAutolinkEnd(text, start, end) {
 }
 
 // Scan the end of a bare GFM autolink URL starting at text[i]: advance
-// until whitespace, '<', or a control char. The URL runs through `](`
-// sequences (probes D08/D22: `https://...)](next)` and
-// `https://...)](https://...)` are a single autolink, not a URL cut
-// at the `]`).
+// until whitespace, '<', or a control char. A `](` sequence is part of
+// the URL only when the `(` group that follows closes without any
+// whitespace inside it (Q1/Q4/D22: `a)](https://x.com/y)` is one
+// autolink); when the group contains a space (Q2/Q3/Q6/doc-08:
+// `a)](https://x.com/y (Most))`), the URL ends right after the `]`
+// and the `(` starts a new segment.
 function scanGfmUrlEnd(text, i) {
   const n = text.length;
   let end = i;
   while (end < n) {
     const c = text.charCodeAt(end);
     if (c === 32 || c === 9 || c === 10 || c === 60 || c < 32) break;
+    if (c === 93 && end + 1 < n && text.charCodeAt(end + 1) === 40) {
+      // look ahead: does the '(' group close without whitespace?
+      let depth = 0, k = end + 1, clean = false;
+      while (k < n) {
+        const kc = text.charCodeAt(k);
+        if (kc === 32 || kc === 9 || kc === 10 || kc < 32) break;
+        if (kc === 40) depth++;
+        else if (kc === 41) { depth--; if (depth === 0) { clean = true; break; } }
+        k++;
+      }
+      if (!clean) { end++; break; }
+    }
     end++;
   }
   return end;
@@ -2185,6 +2199,15 @@ function parseBlocks(st) {
             }
           }
           closeTo(open.length - 1); continue lineLoop;
+        }
+        // A line that is only container markers (e.g. a bare `>` line)
+        // is a blank line inside the containers: it does NOT close the
+        // list item — the item stays open for the next line (doc-08:
+        // `>` between a fenced code block and `>     > Path...` must
+        // not close the `+` item). Mark the list loose and move on.
+        if (cur.i >= cur.s.length) {
+          setBlankPending();
+          continue lineLoop;
         }
         if (tip().t === 'p' && !startsWithListMarker(cur) && !startsInterruptingBlock(cur)) { lazy = true; }
         else closeTo(idx);
