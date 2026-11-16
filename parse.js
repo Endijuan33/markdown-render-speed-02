@@ -177,6 +177,13 @@ function parseInline(text, refs, st) {
   // openUnderscore = # of `_` delims with canOpen and n > 0
   // (email-domain `_` handling).
   let openUnderscore = 0;
+  // When a link whose text had a failed multi-backtick opener
+  // (failedMulti) forms, emphasis delimiters added after it are
+  // invalidated by the first code span that follows (doc-09/16/28:
+  // `_issue table_`, `*small release **same***`, `__issues most__`
+  // stay literal when a `` `...` `` code span follows them). The
+  // value is the delims length at link formation, or -1.
+  let linkFailedMultiDelimLen = -1;
 
   const flushPlain = (end) => {
     if (end > plainStart) {
@@ -226,23 +233,52 @@ function parseInline(text, refs, st) {
       // `[docs each ...](...)` must not match the `` `` `` on the next
       // line — the backticks stay literal and the link forms). The
       // bracket's close is cached on first use (findBracketClose is
-      // O(n) and backticks are frequent).
+      // O(n) and backticks are frequent). If a multi-backtick opener
+      // already failed inside this bracket, a later single backtick
+      // may not open a span across the `]` either (doc-28/L1: the
+      // `` ` `` after `small`/`url` in `` ``small` `` / `` ``url` ``
+      // stays literal and the link forms — only a lone single
+      // backtick, cm-525, may cross).
       let limit;
+      let noCross = false;
       if (brackets.length > 0 && brackets[brackets.length - 1].active) {
         const b = brackets[brackets.length - 1];
         if (b.closeIdx === undefined) b.closeIdx = findBracketClose(text, b.srcPos + 1);
         if (b.closeIdx !== -1) limit = b.closeIdx;
+        noCross = !!b.failedMulti;
       }
-      const res = scanCodeSpan(text, i, limit);
+      const res = scanCodeSpan(text, i, limit, noCross);
       if (res !== null) {
         flushPlain(i);
         out.push(res.html);
         i = res.next; plainStart = i;
+        // A code span after a failedMulti link invalidates the
+        // emphasis delimiters added since that link formed (see above).
+        // Only clear the flag when at least one delimiter was
+        // invalidated: an earlier code span (e.g. `deno`, before the
+        // emphasis) must not consume it (doc-09).
+        if (linkFailedMultiDelimLen !== -1) {
+          let invalidated = false;
+          for (let q = linkFailedMultiDelimLen; q < delims.length; q++) {
+            const o = out[delims[q]];
+            if (o && (o.d === '*' || o.d === '_' || o.d === '~')) {
+              if (o.d === '_' && o.open && o.n > 0) openUnderscore--;
+              o.open = false; o.close = false;
+              invalidated = true;
+            }
+          }
+          if (invalidated) linkFailedMultiDelimLen = -1;
+        }
         continue;
       }
-      // no matching closer: the whole backtick run is literal text
+      // no matching closer: the whole backtick run is literal text.
+      // A failed multi-backtick opener poisons later single backticks
+      // in the same bracket (see above).
       let j = i + 1;
       while (j < n && text.charCodeAt(j) === 96) j++;
+      if (j - i > 1 && brackets.length > 0 && brackets[brackets.length - 1].active) {
+        brackets[brackets.length - 1].failedMulti = true;
+      }
       i = j;
       continue;
     }
@@ -298,12 +334,20 @@ function parseInline(text, refs, st) {
     // --- ] link resolution ---
     if (c === 93) { // ]
       flushPlain(i);
+      // record whether the bracket about to resolve had a failed
+      // multi-backtick opener (for the emphasis invalidation above)
+      let tbFailedMulti = false;
+      let tbDelimLen = -1;
+      for (let q = brackets.length - 1; q >= 0; q--) {
+        if (brackets[q].active) { tbFailedMulti = !!brackets[q].failedMulti; tbDelimLen = brackets[q].delimLen; break; }
+      }
       const r = tryLink(text, i, out, delims, brackets, refs);
       if (r === -1) {
         out.push(']');
         i++;
       } else {
         i = r;
+        if (tbFailedMulti) linkFailedMultiDelimLen = tbDelimLen;
       }
       plainStart = i;
       // tryLink truncates delims: recompute the O(1) `_`-opener counter
@@ -528,7 +572,7 @@ function processEmphasis(delims, out, start) {
 
 // Code span: text[i] === '`'. Returns {content, next} or null (no closing run).
 // content has newlines -> spaces and the one-space strip rule applied (not escaped).
-function codeSpanContent(text, i, limit) {
+function codeSpanContent(text, i, limit, noCross) {
   const n = text.length;
   let j = i;
   while (j < n && text.charCodeAt(j) === 96) j++;
@@ -554,6 +598,7 @@ function codeSpanContent(text, i, limit) {
       // with `]` (cm-525: `` `](/uri)` `` forms) or has `](` but no
       // closing `)` (cm-342: `` `link](/foo` `` forms, cm-537).
       if (limit !== undefined && b >= limit) {
+        if (noCross) return null;
         if (m > 1 || text.slice(j, b).indexOf('\n') !== -1) return null;
         if (text.charCodeAt(j) !== 93) {
           const seg = text.slice(j, b);
@@ -592,8 +637,8 @@ function findBracketClose(text, from) {
   return -1;
 }
 
-function scanCodeSpan(text, i, limit) {
-  const r = codeSpanContent(text, i, limit);
+function scanCodeSpan(text, i, limit, noCross) {
+  const r = codeSpanContent(text, i, limit, noCross);
   if (r === null) return null;
   return { html: '<code>' + escapeCode(r.content) + '</code>', next: r.next };
 }
