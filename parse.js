@@ -173,6 +173,12 @@ function parseInline(text, refs, st) {
   let i = 0;
   const n = text.length;
   let plainStart = 0;
+  // O(1) counters replacing per-char scans:
+  // activeNoLink = # of active brackets that could still form a link
+  // (GFM autolink suppression); openUnderscore = # of `_` delims with
+  // canOpen and n > 0 (email-domain `_` handling).
+  let activeNoLink = 0;
+  let openUnderscore = 0;
 
   const flushPlain = (end) => {
     if (end > plainStart) {
@@ -220,11 +226,14 @@ function parseInline(text, refs, st) {
       // A code span opener inside a link text cannot be closed beyond
       // the link text's `]` (doc-09: `` ``url` `` inside
       // `[docs each ...](...)` must not match the `` `` `` on the next
-      // line — the backticks stay literal and the link forms).
+      // line — the backticks stay literal and the link forms). The
+      // bracket's close is cached on first use (findBracketClose is
+      // O(n) and backticks are frequent).
       let limit;
       if (brackets.length > 0 && brackets[brackets.length - 1].active) {
-        const close = findBracketClose(text, i);
-        if (close !== -1) limit = close;
+        const b = brackets[brackets.length - 1];
+        if (b.closeIdx === undefined) b.closeIdx = findBracketClose(text, b.srcPos + 1);
+        if (b.closeIdx !== -1) limit = b.closeIdx;
       }
       const res = scanCodeSpan(text, i, limit);
       if (res !== null) {
@@ -266,6 +275,7 @@ function parseInline(text, refs, st) {
       }
       flushPlain(i);
       pushDelim(ch, runLen, canOpen, canClose);
+      if (ch === '_' && canOpen) openUnderscore++;
       i = j; plainStart = i;
       continue;
     }
@@ -274,6 +284,7 @@ function parseInline(text, refs, st) {
       flushPlain(i);
       out.push('[');
       brackets.push({ outPos: out.length - 1, bangPos: -1, delimLen: delims.length, active: true, srcPos: i, hasLink: false });
+      activeNoLink++;
       i++; plainStart = i;
       continue;
     }
@@ -284,6 +295,7 @@ function parseInline(text, refs, st) {
       const bangPos = out.length - 1;
       out.push('[');
       brackets.push({ outPos: out.length - 1, bangPos: bangPos, delimLen: delims.length, active: true, srcPos: i + 1, hasLink: false });
+      activeNoLink++;
       i += 2; plainStart = i;
       continue;
     }
@@ -298,6 +310,16 @@ function parseInline(text, refs, st) {
         i = r;
       }
       plainStart = i;
+      // tryLink mutates brackets (active/hasLink/splice) and truncates
+      // delims: recompute the O(1) counters (a `]` is rare, so a scan
+      // here is cheap).
+      activeNoLink = 0;
+      for (let q = 0; q < brackets.length; q++) if (brackets[q].active && !brackets[q].hasLink) activeNoLink++;
+      openUnderscore = 0;
+      for (let q = 0; q < delims.length; q++) {
+        const o = out[delims[q]];
+        if (o && o.d === '_' && o.open && o.n > 0) openUnderscore++;
+      }
       continue;
     }
     // --- < autolink / raw HTML ---
@@ -373,14 +395,16 @@ function parseInline(text, refs, st) {
     // bracket can never form a link, so URLs inside it DO autolink
     // (doc-08: `https://sub.domain.example.io` inside the outer
     // bracket, after the inner link formed, autolinks).
-    if ((c === 119 || c === 104 || c === 102 || isAlnum(c)) && !brackets.some(b => b.active && !b.hasLink) && !st.inLink) {
+    if ((c === 119 || c === 104 || c === 102 || isAlnum(c)) && activeNoLink === 0 && !st.inLink) {
+      // Gate the (expensive) autolink scan to word starts: the char
+      // before must be start-of-text, whitespace, or punctuation
+      // (same check tryGfmAutolink does first). Mid-word alphanumerics
+      // can never start a URL/email, so skip the call entirely.
+      const prev = i === 0 ? 32 : text.charCodeAt(i - 1);
+      if (prev === 32 || prev === 9 || prev === 10 || isPunctCode(prev)) {
       // a _ after an email domain is a closing emphasis delimiter (not
       // part of the address) when an unmatched _ opener precedes it
-      let allowUnderscore = false;
-      for (let d = 0; d < delims.length; d++) {
-        const o = out[delims[d]];
-        if (o && o.d === '_' && o.open && o.n > 0) { allowUnderscore = true; break; }
-      }
+      const allowUnderscore = openUnderscore > 0;
       const auto = tryGfmAutolink(text, i, plainStart, allowUnderscore);
       if (auto !== null) {
         flushPlain(i);
@@ -388,19 +412,19 @@ function parseInline(text, refs, st) {
         i = auto.next; plainStart = i;
         continue;
       }
+      }
     }
     i++;
   }
   flushPlain(n);
   processEmphasis(delims, out, 0);
-  // render
-  let html = '';
+  // render: convert delim objects to strings in place, then join once
+  // (a += loop over many small pieces is measurably slower).
   for (let k = 0; k < out.length; k++) {
     const item = out[k];
-    if (typeof item === 'string') html += item;
-    else html += item.ct + item.d.repeat(item.n) + item.ot;
+    if (typeof item !== 'string') out[k] = item.ct + item.d.repeat(item.n) + item.ot;
   }
-  return html;
+  return out.join('');
 }
 
 // Resolve emphasis/strikethrough delimiters in delims[start..].
@@ -679,6 +703,52 @@ function tryLink(text, closeIdx, out, delims, brackets, refs) {
   const linkTextStart = b.srcPos + 1;
   const linkTextEnd = closeIdx;
   const n = text.length;
+  // A multi-backtick code span whose content contains a backtick,
+  // followed by any further content in the link text, prevents the
+  // link from forming (doc-20: `[but _previous from `` a ` b ``_](...)`
+  // stays literal; the inner URL autolinks instead). When the span is
+  // the last thing in the link text, the link forms (X1/Y5). A span
+  // without an inner backtick never blocks (W2/X4).
+  {
+    let p = linkTextStart;
+    while (p < linkTextEnd) {
+      if (text.charCodeAt(p) === 96) {
+        let q = p + 1;
+        while (q < linkTextEnd && text.charCodeAt(q) === 96) q++;
+        const run = q - p;
+        if (run >= 2) {
+          // find the matching closer run; note any backtick before it
+          let r = q;
+          let closerEnd = -1;
+          let hasInner = false;
+          while (r < linkTextEnd) {
+            if (text.charCodeAt(r) === 96) {
+              let s = r + 1;
+              while (s < linkTextEnd && text.charCodeAt(s) === 96) s++;
+              if (s - r === run) { closerEnd = s; break; }
+              hasInner = true;
+              r = s;
+            } else {
+              r++;
+            }
+          }
+          if (closerEnd !== -1 && hasInner && closerEnd < linkTextEnd) {
+            // The link does not form, and the emphasis delimiters
+            // inside the link text stay literal too (doc-20: the
+            // `_previous from ..._` around the code span is NOT an
+            // <em>). Drop them from the delim stack without resolving.
+            delims.length = b.delimLen;
+            b.active = false;
+            return -1;
+          }
+          break;
+        }
+        p = q;
+      } else {
+        p++;
+      }
+    }
+  }
   let dest = null;
   let title = null;
   let end = -1;
@@ -1957,8 +2027,12 @@ function parseBlocks(st) {
         // line after the opening fence is not indented enough, the
         // block is empty — the line is not code content (doc-13:
         // `  ````sh` followed by `print(...)` at column 0 leaves an
-        // empty sh block and the line becomes a paragraph).
-        if (tip().t === 'code' && tip().fenced && curIndent(cur) < node.contentIndent && tip().lines.length > 0) { container = node; idx++; continue; }
+        // empty sh block and the line becomes a paragraph). A BLANK
+        // line (empty remainder after container markers) is always
+        // owned, even with no content yet (doc-10: `>   ~~~shell`
+        // followed by a blank `>` line — the blank line is an empty
+        // code line, not the end of the block).
+        if (tip().t === 'code' && tip().fenced && curIndent(cur) < node.contentIndent && (tip().lines.length > 0 || cur.i >= cur.s.length)) { container = node; idx++; continue; }
         const ind = curIndent(cur);
         // An empty item (no children yet) that a blank line has passed
         // does not accept indented content: the list is over and the
