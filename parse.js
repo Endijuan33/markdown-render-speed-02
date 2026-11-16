@@ -2791,6 +2791,14 @@ function renderBlock(node, st, tightParent) {
         }
         out += renderBlock(child, st, !loose);
       }
+      // An HTML block that is the last child of a list item carries
+      // no trailing newline: the `</li>` follows its content
+      // directly (doc-30: `<!-- note -->` in an item). An HTML block
+      // followed by another block in the same item keeps its `\n`
+      // (doc-04: the `<!-- note -->` line's `\n` is the paragraph's
+      // soft break).
+      const lastKid = kids[kids.length - 1];
+      if (lastKid && lastKid.t === 'html' && out.endsWith('\n')) out = out.slice(0, -1);
       out += '</li>\n';
       return out;
     }
