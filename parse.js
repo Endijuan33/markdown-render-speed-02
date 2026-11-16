@@ -2284,7 +2284,21 @@ function parseBlocks(st) {
         }
         if (hasTab) {
         const parent = open.length >= 2 ? open[open.length - 2] : null;
-        let col = (parent && parent.t === 'quote') ? 2 : cur.col;
+        const grandparent = open.length >= 3 ? open[open.length - 3] : null;
+        // base column of the code content: 2 when the blockquote
+        // parent is itself nested (inside a list item or another
+        // quote — doc-05, doc-09, doc-19); but a TOP-LEVEL blockquote
+        // (grandparent is the document root) expands from the current
+        // column, which already includes the fence-indent stripping
+        // (doc-26: `>   \t` after a 2-space fence indent expands from
+        // column 4 to 4 spaces). A list-item parent expands from
+        // the current column.
+        let col;
+        if (parent && parent.t === 'quote') {
+          col = (grandparent && grandparent.t === 'doc') ? cur.col : 2;
+        } else {
+          col = cur.col;
+        }
         let out = '';
         let q = 0;
         while (q < txt.length && (txt.charCodeAt(q) === 32 || txt.charCodeAt(q) === 9)) {
