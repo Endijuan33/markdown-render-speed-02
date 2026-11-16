@@ -1977,6 +1977,21 @@ function isContainerNode(node) {
   return node.t === 'doc' || node.t === 'quote' || node.t === 'list' || node.t === 'item';
 }
 
+// Expand leading tabs in a paragraph line to spaces, using the
+// column at which the line starts (doc-40: `> \tindented` inside a
+// blockquote renders as 2 spaces, not a raw tab). Only the leading
+// whitespace is expanded; tabs later in the line are kept.
+function expandLeadingTabs(text, col) {
+  let k = 0, out = '';
+  while (k < text.length) {
+    const c = text.charCodeAt(k);
+    if (c === 32) { out += ' '; col++; k++; }
+    else if (c === 9) { const w = 4 - (col % 4); out += ' '.repeat(w); col += w; k++; }
+    else break;
+  }
+  return out + text.slice(k);
+}
+
 function parseBlocks(st) {
   const root = { t: 'doc', children: [] };
   const open = [root];
@@ -2317,7 +2332,10 @@ function parseBlocks(st) {
       if (trimmed.length > 0 && (/^=+$/.test(trimmed) || /^-+$/.test(trimmed))) {
         lt = '    ' + trimmed;
       }
-      tip().lines.push(lt);
+      // Leading tabs in a lazy paragraph line expand to spaces from
+      // the line's starting column (doc-40: `> \tindented` as a lazy
+      // continuation renders as 2 spaces, not a raw tab).
+      tip().lines.push(expandLeadingTabs(lt, cur.col - cur.pend));
       continue;
     }
 
@@ -2510,7 +2528,7 @@ function parseBlocks(st) {
           // `505791.`, doc-04 `382900.`, doc-10 `0)`)
           (open.length >= 2 && open[open.length - 2].t === 'item')));
       if (!interrupts) {
-        t.lines.push(curText(cur));
+        t.lines.push(expandLeadingTabs(curText(cur), cur.col - cur.pend));
         continue;
       }
       // close the paragraph and fall through to new-block detection
@@ -2663,7 +2681,7 @@ function parseBlocks(st) {
       // paragraph (default)
       markLoose();
       {
-        const node = { t: 'p', lines: [curText(cur)] };
+        const node = { t: 'p', lines: [expandLeadingTabs(curText(cur), cur.col - cur.pend)] };
         addNode(node);
         continue lineLoop;
       }
