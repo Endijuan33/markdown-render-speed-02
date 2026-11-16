@@ -535,13 +535,16 @@ function processEmphasis(delims, out, start) {
       // literal (doc-01/doc-07: `*...**change**in*`). If the strong
       // opener can also close (intraword, cm-411 `*foo**bar**baz*`) the
       // outer still forms <em>; a strong closer followed by space or
-      // punctuation does not block either (`*foo **bar** baz*`).
+      // punctuation does not block either (`*foo **bar** baz*`). The
+      // block applies only to `**` strong spans: a `__` strong span
+      // whose closer follows a code span does not block (F3/doc-18/29:
+      // `*foo __bar `x`__*` forms the outer <em>).
       if (ch === '*' && !(o.n >= 2 && closer.n >= 2)) {
         const oPos = delims[j], cPos = delims[k];
         let blocked = false;
         for (let s = 0; s < spans.length; s++) {
           const sOp = spans[s][0], sCl = spans[s][1];
-          if (spans[s][2] === 'strong' && sOp > oPos && sCl < cPos) {
+          if (spans[s][2] === 'strong' && spans[s][3] === '*' && sOp > oPos && sCl < cPos) {
             const sOpener = out[sOp], sCloser = out[sCl];
             if (sOpener && sCloser && !sOpener.close && sCloser.open) { blocked = true; break; }
           }
@@ -562,7 +565,7 @@ function processEmphasis(delims, out, start) {
     }
     opener.ot = '<' + tag + '>' + opener.ot;
     closer.ct = closer.ct + '</' + tag + '>';
-    spans.push([delims[openerIdx], delims[k], tag]);
+    spans.push([delims[openerIdx], delims[k], tag, ch]);
     opener.n -= use;
     closer.n -= use;
     if (closer.n <= 0) k++;
