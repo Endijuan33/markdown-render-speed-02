@@ -2193,7 +2193,11 @@ function parseBlocks(st) {
         }
         cur.i = sI; cur.col = sC; cur.pend = sP;
         // an empty remainder is not a lazy continuation: it closes the
-        // paragraph (like a blank line) but leaves the containers open.
+        // paragraph (like a blank line) AND the unmatched quote — the
+        // quote whose `>` is missing is over (doc-33: a bare `>`
+        // between two `> >` blocks closes the inner quote so the
+        // next `> >` opens a fresh one). Containers below the
+        // unmatched quote (e.g. a list item) stay open (doc-08).
         // If the paragraph is a direct child of a list item, the line
         // separates two blocks inside that item, so the item's list
         // becomes loose when the next block starts in it (cm-259).
@@ -2204,7 +2208,7 @@ function parseBlocks(st) {
               if (open[k].t === 'quote' || open[k].t === 'root') break;
             }
           }
-          closeTo(open.length - 1); continue lineLoop;
+          closeTo(idx); continue lineLoop;
         }
         if (tip().t === 'p' && !startsWithListMarker(cur) && !startsInterruptingBlock(cur)) { lazy = true; }
         else closeTo(idx);
