@@ -398,14 +398,16 @@ function parseInline(text, refs, st) {
       // A URL inside a bracket autolinks unless that bracket will
       // form a link (doc-39). Check every active bracket: the URL is
       // inside all of them, and any one forming a link makes it link
-      // text (plain). Cache each bracket's close index (findBracketClose
-      // is O(n)).
+      // text (plain). Cache each bracket's close index and will-form
+      // verdict (findBracketClose and the destination parse are O(n),
+      // and many URLs can sit inside one bracket).
       let suppress = false;
       for (let q = 0; q < brackets.length; q++) {
         const br = brackets[q];
         if (!br.active || br.hasLink) continue;
         if (br.closeIdx === undefined) br.closeIdx = findBracketClose(text, br.srcPos + 1);
-        if (bracketWillFormLink(text, br, refs)) { suppress = true; break; }
+        if (br.willForm === undefined) br.willForm = bracketWillFormLink(text, br, refs);
+        if (br.willForm) { suppress = true; break; }
       }
       if (!suppress) {
       // a _ after an email domain is a closing emphasis delimiter (not
@@ -1510,11 +1512,19 @@ function curSkipSpaces(cur, maxCols) {
   let adv = 0;
   while (adv < maxCols) {
     const c = curChar(cur);
-    if (c === 32 || c === 9) {
+    if (c === 32) {
       // consuming pend moves the logical column forward, but cur.col is
       // already at the tab stop, so col does not move
       if (cur.pend > 0) { cur.pend--; adv++; }
       else { cur.i++; cur.col++; adv++; }
+    } else if (c === 9) {
+      // a tab advances to the next multiple of 4 columns, not 1: a
+      // leading tab is 4 columns of indent, which exceeds the 3-column
+      // limit for a block start (doc-14: `\t<div>` is indented code,
+      // not an HTML block). Only skip the tab if its full width fits.
+      const w = ((cur.col / 4) | 0) * 4 + 4 - cur.col;
+      if (adv + w > maxCols) break;
+      cur.i++; cur.col += w; adv += w;
     } else break;
   }
   return adv;
